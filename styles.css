@@ -40,6 +40,8 @@
   /* Equipos */
   --team-1-color:       #2dce5c;
   --team-2-color:       #4a9eff;
+  --team-3-color:       #f0c040;
+  --team-4-color:       #ff6b35;
 
   /* Espaciado */
   --space-xs:   4px;
@@ -658,6 +660,40 @@ body {
   gap: var(--space-lg);
 }
 
+/* Selector de número de equipos */
+.num-teams-selector {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.num-teams-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.num-teams-btn:hover {
+  border-color: var(--color-green);
+  color: var(--color-green);
+}
+
+.num-teams-btn.active {
+  background: var(--color-green);
+  border-color: var(--color-green);
+  color: #000;
+}
+
 /* Toggle switch */
 .toggle-label {
   display: flex;
@@ -789,9 +825,13 @@ body {
 /* ============ TEAMS AREA ============ */
 .teams-area {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--space-md);
 }
+
+.teams-area.teams-count-2 { grid-template-columns: repeat(2, 1fr); }
+.teams-area.teams-count-3 { grid-template-columns: repeat(3, 1fr); }
+.teams-area.teams-count-4 { grid-template-columns: repeat(2, 1fr); }
 
 .team-card {
   background: var(--color-bg-card);
@@ -812,8 +852,17 @@ body {
 .team-card--2 {
   border-top: 3px solid var(--team-2-color);
 }
+.team-card--3 {
+  border-top: 3px solid var(--team-3-color);
+}
+.team-card--4 {
+  border-top: 3px solid var(--team-4-color);
+}
 
-.team-header {
+.team-name--1 { color: var(--team-1-color); }
+.team-name--2 { color: var(--team-2-color); }
+.team-name--3 { color: var(--team-3-color); }
+.team-name--4 { color: var(--team-4-color); }
   padding: var(--space-md);
   background: var(--color-bg-card-2);
   border-bottom: 1px solid var(--color-border);
@@ -827,8 +876,6 @@ body {
   letter-spacing: 0.04em;
   margin-bottom: 2px;
 }
-.team-name--1 { color: var(--team-1-color); }
-.team-name--2 { color: var(--team-2-color); }
 
 .team-meta {
   font-size: 0.75rem;
@@ -1300,6 +1347,12 @@ body {
   }
 
   .teams-area {
+    grid-template-columns: 1fr;
+  }
+
+  .teams-area.teams-count-2,
+  .teams-area.teams-count-3,
+  .teams-area.teams-count-4 {
     grid-template-columns: 1fr;
   }
 

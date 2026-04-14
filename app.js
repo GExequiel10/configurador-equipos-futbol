@@ -21,9 +21,8 @@ const App = {
     time: '',
     notes: ''
   },
-  teams: {            // Equipos generados
-    team1: [],
-    team2: []
+  teams: {            // Equipos generados (array dinámico de arrays)
+    list: []          // [ [jugadores equipo 1], [jugadores equipo 2], ... ]
   },
   expenses: {         // Calculadora de gastos
     total: 0,
@@ -36,6 +35,7 @@ const App = {
   selectedLevel: 3,
   teamsGenerated: false,
   editMode: false,
+  numTeams: 3,        // Cantidad de equipos a generar
 };
 
 /* ============================================================
@@ -77,13 +77,20 @@ function loadFromStorage(key) {
 function loadAllData() {
   App.players  = loadFromStorage(STORAGE_KEYS.PLAYERS)  || [];
   App.matchInfo= loadFromStorage(STORAGE_KEYS.MATCH)    || { place:'', date:'', time:'', notes:'' };
-  App.teams    = loadFromStorage(STORAGE_KEYS.TEAMS)    || { team1:[], team2:[] };
+  App.teams    = loadFromStorage(STORAGE_KEYS.TEAMS)    || { list: [] };
   App.expenses = loadFromStorage(STORAGE_KEYS.EXPENSES) || { total:0, currency:'ARS', excluded:[] };
   App.history  = loadFromStorage(STORAGE_KEYS.HISTORY)  || [];
 
+  // Migrar formato viejo (team1/team2) al nuevo (list)
+  if (App.teams.team1 !== undefined) {
+    App.teams = { list: [App.teams.team1 || [], App.teams.team2 || []] };
+    saveToStorage(STORAGE_KEYS.TEAMS, App.teams);
+  }
+
   // Si había equipos guardados, marcar como generados
-  if (App.teams.team1.length > 0 || App.teams.team2.length > 0) {
+  if (App.teams.list && App.teams.list.some(t => t.length > 0)) {
     App.teamsGenerated = true;
+    App.numTeams = App.teams.list.length;
   }
 }
 
@@ -309,9 +316,10 @@ async function deletePlayer(id) {
   saveToStorage(STORAGE_KEYS.PLAYERS, App.players);
 
   // Eliminar también de equipos si estaba
-  App.teams.team1 = App.teams.team1.filter(p => p.id !== id);
-  App.teams.team2 = App.teams.team2.filter(p => p.id !== id);
-  saveToStorage(STORAGE_KEYS.TEAMS, App.teams);
+  if (App.teams.list) {
+    App.teams.list = App.teams.list.map(team => team.filter(p => p.id !== id));
+    saveToStorage(STORAGE_KEYS.TEAMS, App.teams);
+  }
 
   // Eliminar de excluidos
   App.expenses.excluded = App.expenses.excluded.filter(eid => eid !== id);
@@ -337,7 +345,7 @@ async function clearAllPlayers() {
   if (!confirmed) return;
 
   App.players = [];
-  App.teams = { team1: [], team2: [] };
+  App.teams = { list: [] };
   App.expenses.excluded = [];
   App.teamsGenerated = false;
 
@@ -547,13 +555,14 @@ function copyMatchInfo() {
    ============================================================ */
 
 /**
- * Algoritmo de división equilibrada por nivel.
- * Usa un enfoque greedy: ordena jugadores por nivel DESC
- * y los asigna alternando al equipo con menor suma de niveles.
+ * Algoritmo de división equilibrada por nivel para N equipos.
+ * Ordena jugadores por nivel DESC y los asigna al equipo
+ * con menor suma acumulada (greedy).
  * @param {Array} players - Lista de jugadores
- * @returns {{ team1: Array, team2: Array }}
+ * @param {number} n - Número de equipos
+ * @returns {Array} Array de N arrays (equipos)
  */
-function divideTeamsBalanced(players) {
+function divideTeamsBalanced(players, n) {
   // Mezclar aleatoriamente primero (Fisher-Yates)
   const shuffled = [...players];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -564,47 +573,45 @@ function divideTeamsBalanced(players) {
   // Ordenar por nivel descendente para greedy
   const sorted = [...shuffled].sort((a, b) => b.level - a.level);
 
-  const team1 = [];
-  const team2 = [];
-  let sum1 = 0;
-  let sum2 = 0;
+  // Inicializar N equipos vacíos con suma 0
+  const teams = Array.from({ length: n }, () => []);
+  const sums  = Array(n).fill(0);
 
   sorted.forEach(player => {
-    if (sum1 <= sum2) {
-      team1.push(player);
-      sum1 += player.level;
-    } else {
-      team2.push(player);
-      sum2 += player.level;
-    }
+    // Asignar al equipo con menor suma
+    const minIdx = sums.indexOf(Math.min(...sums));
+    teams[minIdx].push(player);
+    sums[minIdx] += player.level;
   });
 
-  return { team1, team2 };
+  return teams;
 }
 
 /**
- * División aleatoria simple (sin considerar niveles).
+ * División aleatoria simple para N equipos (sin niveles).
  * @param {Array} players
- * @returns {{ team1: Array, team2: Array }}
+ * @param {number} n - Número de equipos
+ * @returns {Array} Array de N arrays (equipos)
  */
-function divideTeamsRandom(players) {
+function divideTeamsRandom(players, n) {
   const shuffled = [...players];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
 
-  const half = Math.ceil(shuffled.length / 2);
-  return {
-    team1: shuffled.slice(0, half),
-    team2: shuffled.slice(half)
-  };
+  const teams = Array.from({ length: n }, () => []);
+  shuffled.forEach((player, i) => {
+    teams[i % n].push(player);
+  });
+
+  return teams;
 }
 
 /** Genera los equipos según la configuración actual. */
 function generateTeams() {
-  if (App.players.length < 2) {
-    showToast('Necesitás al menos 2 jugadores', 'error');
+  if (App.players.length < App.numTeams) {
+    showToast(`Necesitás al menos ${App.numTeams} jugadores para ${App.numTeams} equipos`, 'error');
     return;
   }
 
@@ -616,11 +623,11 @@ function generateTeams() {
   setTimeout(() => btn.classList.remove('btn--generating'), 700);
 
   // Dividir equipos
-  const result = byLevel
-    ? divideTeamsBalanced(App.players)
-    : divideTeamsRandom(App.players);
+  const teamsList = byLevel
+    ? divideTeamsBalanced(App.players, App.numTeams)
+    : divideTeamsRandom(App.players, App.numTeams);
 
-  App.teams = result;
+  App.teams = { list: teamsList };
   App.teamsGenerated = true;
 
   saveToStorage(STORAGE_KEYS.TEAMS, App.teams);
@@ -633,7 +640,7 @@ function generateTeams() {
   renderTeams();
   renderBalanceIndicator();
 
-  showToast('⚽ ¡Equipos generados!', 'success');
+  showToast(`⚽ ¡${App.numTeams} equipos generados!`, 'success');
 }
 
 /** Re-mezcla los equipos (misma lógica, nueva aleatoriedad). */
@@ -644,13 +651,11 @@ function reshuffleTeams() {
 
 /** Renderiza los equipos en el DOM. */
 function renderTeams() {
-  const area    = document.getElementById('teams-area');
-  const emptyEl = document.getElementById('empty-teams');
+  const area = document.getElementById('teams-area');
 
-  if (!App.teamsGenerated || (App.teams.team1.length === 0 && App.teams.team2.length === 0)) {
-    // Mostrar empty state
+  if (!App.teamsGenerated || !App.teams.list || App.teams.list.every(t => t.length === 0)) {
     area.innerHTML = '';
-    area.classList.remove('edit-mode');
+    area.className = 'teams-area';
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.id = 'empty-teams';
@@ -660,71 +665,61 @@ function renderTeams() {
       <p class="empty-subtext">Agregá jugadores y presioná "Generar Equipos".</p>
     `;
     area.appendChild(empty);
-
-    // Ocultar balance indicator
     document.getElementById('balance-indicator').style.display = 'none';
     return;
   }
 
-  // Determinar si estamos en modo edición
   const isEditMode = document.getElementById('edit-mode-toggle').checked;
-  if (isEditMode) {
-    area.classList.add('edit-mode');
-  } else {
-    area.classList.remove('edit-mode');
-  }
+  const n = App.teams.list.length;
 
-  // Calcular sumas de niveles
-  const sum1 = App.teams.team1.reduce((acc, p) => acc + p.level, 0);
-  const sum2 = App.teams.team2.reduce((acc, p) => acc + p.level, 0);
+  // Aplicar clase de grid según cantidad de equipos
+  area.className = `teams-area teams-count-${n}${isEditMode ? ' edit-mode' : ''}`;
 
-  area.innerHTML = `
-    ${renderTeamCard(1, App.teams.team1, sum1, isEditMode)}
-    ${renderTeamCard(2, App.teams.team2, sum2, isEditMode)}
-  `;
+  area.innerHTML = App.teams.list.map((players, idx) =>
+    renderTeamCard(idx, players, isEditMode)
+  ).join('');
 
   // Eventos para mover jugadores en modo edición
   if (isEditMode) {
     area.querySelectorAll('.move-player-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const playerId  = btn.dataset.playerId;
-        const fromTeam  = parseInt(btn.dataset.fromTeam, 10);
-        movePlayerBetweenTeams(playerId, fromTeam);
+        movePlayerBetweenTeams(btn.dataset.playerId, parseInt(btn.dataset.fromTeam, 10));
       });
     });
   }
 
-  // Mostrar y actualizar balance indicator
   document.getElementById('balance-indicator').style.display = 'block';
   renderBalanceIndicator();
 }
 
 /**
  * Genera el HTML de una tarjeta de equipo.
- * @param {number} teamNum - 1 o 2
+ * @param {number} idx   - Índice del equipo (0-based)
  * @param {Array}  players - Jugadores del equipo
- * @param {number} levelSum - Suma de niveles
  * @param {boolean} editMode - Si está en modo edición
  */
-function renderTeamCard(teamNum, players, levelSum, editMode) {
-  const names = ['', 'Equipo Verde', 'Equipo Azul'];
-  const icons = ['', '🟢', '🔵'];
+function renderTeamCard(idx, players, editMode) {
+  const teamNum = idx + 1;
+  const names   = ['Verde', 'Azul', 'Amarillo', 'Naranja'];
+  const icons   = ['🟢', '🔵', '🟡', '🟠'];
+  const name    = names[idx] || `Equipo ${teamNum}`;
+  const icon    = icons[idx] || '⚽';
+  const levelSum = players.reduce((acc, p) => acc + p.level, 0);
 
+  // Los jugadores se muestran SIN nivel (para no generar comparaciones)
   const playerRows = players.map(p => `
     <div class="team-player-item">
-      <span class="level-badge level-${p.level}">${p.level}</span>
       <span style="flex:1; font-size:0.9rem;">${escapeHtml(p.name)}</span>
-      ${editMode ? `<button class="move-player-btn" data-player-id="${p.id}" data-from-team="${teamNum}" title="Mover al otro equipo">⇄</button>` : ''}
+      ${editMode ? `<button class="move-player-btn" data-player-id="${p.id}" data-from-team="${idx}" title="Mover a otro equipo">⇄</button>` : ''}
     </div>
   `).join('');
 
   return `
     <div class="team-card team-card--${teamNum}">
       <div class="team-header">
-        <div class="team-name team-name--${teamNum}">${icons[teamNum]} ${names[teamNum]}</div>
+        <div class="team-name team-name--${teamNum}">${icon} Equipo ${name}</div>
         <div class="team-meta">
           <span>👥 ${players.length} jugadores</span>
-          <span>⭐ Nivel total: ${levelSum}</span>
         </div>
       </div>
       <div class="team-players-list">
@@ -735,86 +730,103 @@ function renderTeamCard(teamNum, players, levelSum, editMode) {
 }
 
 /**
- * Mueve un jugador entre equipos (modo edición).
+ * Mueve un jugador a otro equipo. Si hay más de 2 equipos,
+ * lo rota al siguiente (índice + 1 en ciclo).
  * @param {string} playerId
- * @param {number} fromTeam - Equipo de origen (1 o 2)
+ * @param {number} fromIdx - Índice del equipo de origen (0-based)
  */
-function movePlayerBetweenTeams(playerId, fromTeam) {
-  const fromKey = `team${fromTeam}`;
-  const toKey   = fromTeam === 1 ? 'team2' : 'team1';
+function movePlayerBetweenTeams(playerId, fromIdx) {
+  const n = App.teams.list.length;
+  const toIdx = (fromIdx + 1) % n;
 
-  const playerIndex = App.teams[fromKey].findIndex(p => p.id === playerId);
+  const playerIndex = App.teams.list[fromIdx].findIndex(p => p.id === playerId);
   if (playerIndex === -1) return;
 
-  const [player] = App.teams[fromKey].splice(playerIndex, 1);
-  App.teams[toKey].push(player);
+  const [player] = App.teams.list[fromIdx].splice(playerIndex, 1);
+  App.teams.list[toIdx].push(player);
 
   saveToStorage(STORAGE_KEYS.TEAMS, App.teams);
   renderTeams();
 
-  showToast(`↔️ ${player.name} movido al otro equipo`, 'info');
+  const teamNames = ['Verde', 'Azul', 'Amarillo', 'Naranja'];
+  showToast(`↔️ ${player.name} → Equipo ${teamNames[toIdx] || toIdx + 1}`, 'info');
 }
 
 /** Renderiza el indicador de equilibrio de equipos. */
 function renderBalanceIndicator() {
   const display = document.getElementById('balance-display');
-  if (!display) return;
+  if (!display || !App.teams.list) return;
 
-  const sum1 = App.teams.team1.reduce((acc, p) => acc + p.level, 0);
-  const sum2 = App.teams.team2.reduce((acc, p) => acc + p.level, 0);
-  const total = sum1 + sum2;
-
+  const sums  = App.teams.list.map(team => team.reduce((acc, p) => acc + p.level, 0));
+  const total = sums.reduce((a, b) => a + b, 0);
   if (total === 0) return;
 
-  const ratio    = sum1 / total; // 0 a 1
-  const diff     = Math.abs(sum1 - sum2);
-  const percent1 = Math.round(ratio * 100);
+  const maxSum  = Math.max(...sums);
+  const minSum  = Math.min(...sums);
+  const diff    = maxSum - minSum;
+  const names   = ['Verde', 'Azul', 'Amarillo', 'Naranja'];
+  const colors  = ['var(--team-1-color)', 'var(--team-2-color)', 'var(--team-3-color)', 'var(--team-4-color)'];
 
-  // Calcular color de estado
   let statusClass = 'balance-status--ok';
   let statusText  = '✅ Equipos muy equilibrados';
-  if (diff > 5) { statusClass = 'balance-status--bad';  statusText = '❌ Gran diferencia de niveles'; }
+  if (diff > 5)    { statusClass = 'balance-status--bad';  statusText = '❌ Gran diferencia de niveles'; }
   else if (diff > 2) { statusClass = 'balance-status--warn'; statusText = '⚠️ Diferencia leve'; }
 
-  display.innerHTML = `
-    <div class="balance-team-info">
-      <div class="balance-team-label">🟢 Equipo 1</div>
-      <div class="balance-score balance-score--team1">${sum1}</div>
-    </div>
-    <div class="balance-bar-container">
-      <div class="balance-bar-track">
-        <div class="balance-bar-fill" style="width: ${percent1}%"></div>
-        <div class="balance-bar-mid"></div>
+  const teamsHtml = sums.map((sum, idx) => `
+    <div style="text-align:center;">
+      <div style="font-size:0.7rem; font-weight:700; text-transform:uppercase; color:var(--color-text-dim); letter-spacing:0.04em; margin-bottom:2px;">
+        ${names[idx] || 'Eq. ' + (idx+1)}
       </div>
-      <div class="balance-status ${statusClass}">${statusText} (dif: ${diff})</div>
+      <div style="font-family:var(--font-display); font-weight:800; font-size:1.4rem; color:${colors[idx]};">${sum}</div>
     </div>
-    <div class="balance-team-info" style="text-align:right;">
-      <div class="balance-team-label">🔵 Equipo 2</div>
-      <div class="balance-score balance-score--team2">${sum2}</div>
+  `).join('');
+
+  // Barra proporcional al equipo con más nivel
+  const barsHtml = sums.map((sum, idx) => `
+    <div title="Equipo ${names[idx]}: nivel ${sum}" style="
+      height: 8px;
+      flex: ${sum || 1};
+      background: ${colors[idx]};
+      border-radius: 2px;
+      transition: flex 0.5s ease;
+    "></div>
+  `).join('');
+
+  display.innerHTML = `
+    <div style="display:flex; justify-content:space-around; gap:var(--space-md); flex-wrap:wrap; margin-bottom:var(--space-md);">
+      ${teamsHtml}
     </div>
+    <div style="display:flex; gap:3px; border-radius:var(--radius-full); overflow:hidden; margin-bottom:var(--space-sm);">
+      ${barsHtml}
+    </div>
+    <div class="balance-status ${statusClass}">${statusText} (diferencia: ${diff} pts)</div>
   `;
 }
 
 /** Copia los equipos para compartir por WhatsApp. */
 function copyTeamsForWhatsApp() {
-  if (!App.teamsGenerated) {
+  if (!App.teamsGenerated || !App.teams.list) {
     showToast('Generá los equipos primero', 'error');
     return;
   }
 
-  const sum1 = App.teams.team1.reduce((acc, p) => acc + p.level, 0);
-  const sum2 = App.teams.team2.reduce((acc, p) => acc + p.level, 0);
-
+  const names  = ['Verde', 'Azul', 'Amarillo', 'Naranja'];
+  const icons  = ['🟢', '🔵', '🟡', '🟠'];
   const listPlayers = (players) =>
-    players.map((p, i) => `  ${i + 1}. ${p.name} (Niv. ${p.level})`).join('\n');
+    players.map((p, i) => `  ${i + 1}. ${p.name}`).join('\n');
 
   let text = '⚽ *EQUIPOS DEL PARTIDO* ⚽\n';
   text += '━━━━━━━━━━━━━━━━━━\n\n';
-  text += `🟢 *EQUIPO VERDE* (nivel total: ${sum1})\n`;
-  text += listPlayers(App.teams.team1) + '\n\n';
-  text += `🔵 *EQUIPO AZUL* (nivel total: ${sum2})\n`;
-  text += listPlayers(App.teams.team2) + '\n';
-  text += '━━━━━━━━━━━━━━━━━━';
+
+  App.teams.list.forEach((players, idx) => {
+    const icon = icons[idx] || '⚽';
+    const name = names[idx] || `Equipo ${idx + 1}`;
+    text += `${icon} *EQUIPO ${name.toUpperCase()}*\n`;
+    text += listPlayers(players) + '\n\n';
+  });
+
+  text = text.trimEnd();
+  text += '\n━━━━━━━━━━━━━━━━━━';
 
   if (App.matchInfo.place || App.matchInfo.date) {
     text += `\n📍 ${App.matchInfo.place || ''}`;
@@ -1004,7 +1016,7 @@ function initCurrencySelector() {
 
 /** Guarda el partido actual en el historial. */
 async function saveMatchToHistory() {
-  if (!App.teamsGenerated) {
+  if (!App.teamsGenerated || !App.teams.list) {
     showToast('Generá los equipos antes de guardar', 'error');
     return;
   }
@@ -1016,10 +1028,7 @@ async function saveMatchToHistory() {
     id:      generateId(),
     savedAt: Date.now(),
     matchInfo: { ...App.matchInfo },
-    teams: {
-      team1: [...App.teams.team1.map(p => ({ name: p.name, level: p.level }))],
-      team2: [...App.teams.team2.map(p => ({ name: p.name, level: p.level }))],
-    },
+    teams: App.teams.list.map(team => team.map(p => ({ name: p.name, level: p.level }))),
     score: { team1: score1, team2: score2 },
     expenses: {
       total: App.expenses.total,
@@ -1027,9 +1036,8 @@ async function saveMatchToHistory() {
     }
   };
 
-  App.history.unshift(record); // Agregar al inicio (más reciente primero)
+  App.history.unshift(record);
 
-  // Limitar historial a los últimos 50 partidos
   if (App.history.length > 50) {
     App.history = App.history.slice(0, 50);
   }
@@ -1048,7 +1056,6 @@ function renderHistory() {
 
   if (!listEl) return;
 
-  // Limpiar
   const existing = listEl.querySelectorAll('.history-item');
   existing.forEach(el => el.remove());
 
@@ -1058,6 +1065,8 @@ function renderHistory() {
   }
 
   emptyEl.style.display = 'none';
+
+  const teamNames = ['Verde', 'Azul', 'Amarillo', 'Naranja'];
 
   App.history.forEach(record => {
     const item = document.createElement('div');
@@ -1071,8 +1080,22 @@ function renderHistory() {
     const score1 = record.score?.team1 ?? '—';
     const score2 = record.score?.team2 ?? '—';
 
-    const team1Names = record.teams?.team1?.map(p => p.name).join(', ') || '—';
-    const team2Names = record.teams?.team2?.map(p => p.name).join(', ') || '—';
+    // Soportar tanto formato nuevo (teams: array) como viejo (teams: {team1, team2})
+    let teamsList = [];
+    if (Array.isArray(record.teams)) {
+      teamsList = record.teams;
+    } else if (record.teams?.team1) {
+      teamsList = [record.teams.team1, record.teams.team2];
+    }
+
+    const teamsHtml = teamsList.map((team, idx) => `
+      <div class="history-team-mini">
+        <strong style="color:${['var(--team-1-color)','var(--team-2-color)','var(--team-3-color)','var(--team-4-color)'][idx] || 'inherit'}">
+          Equipo ${teamNames[idx] || idx + 1}
+        </strong>
+        <span>${escapeHtml(team.map(p => p.name).join(', ')) || '—'}</span>
+      </div>
+    `).join('');
 
     item.innerHTML = `
       <div class="history-item-header">
@@ -1086,20 +1109,10 @@ function renderHistory() {
           <span class="history-vs">vs</span>
           <span class="history-team-score history-team-score--2">🔵 ${score2}</span>
         </div>
-        <div class="history-teams-mini">
-          <div class="history-team-mini">
-            <strong>Equipo Verde</strong>
-            <span>${escapeHtml(team1Names)}</span>
-          </div>
-          <div class="history-team-mini">
-            <strong>Equipo Azul</strong>
-            <span>${escapeHtml(team2Names)}</span>
-          </div>
-        </div>
+        <div class="history-teams-mini">${teamsHtml}</div>
       </div>
     `;
 
-    // Evento eliminar
     item.querySelector('.history-delete-btn').addEventListener('click', () => {
       deleteHistoryRecord(record.id);
     });
@@ -1296,6 +1309,15 @@ function bindEvents() {
     .addEventListener('click', copyMatchInfo);
 
   // ---- EQUIPOS ----
+  // Selector de cantidad de equipos
+  document.querySelectorAll('.num-teams-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.num-teams-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      App.numTeams = parseInt(btn.dataset.num, 10);
+    });
+  });
+
   document.getElementById('generate-teams-btn')
     .addEventListener('click', generateTeams);
 
@@ -1359,6 +1381,11 @@ function init() {
   renderTeams();
   renderPayersList();
   renderHistory();
+
+  // Sincronizar selector de número de equipos con el estado cargado
+  document.querySelectorAll('.num-teams-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.num, 10) === App.numTeams);
+  });
 
   // 5. Si había equipos generados, habilitar botones
   if (App.teamsGenerated) {
