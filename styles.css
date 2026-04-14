@@ -1215,12 +1215,15 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.75);
   z-index: 1000;
-  display: flex !important;
   align-items: center;
   justify-content: center;
   padding: var(--space-md);
   backdrop-filter: blur(4px);
   animation: modalFadeIn 0.2s ease;
+}
+
+.modal-overlay[style*="display: flex"] {
+  display: flex !important;
 }
 
 @keyframes modalFadeIn {
